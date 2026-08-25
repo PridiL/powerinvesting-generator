@@ -1,0 +1,76 @@
+name: Refresh data and publish
+
+# Refreshes closing prices and warrant data, then republishes the site.
+# The deck quotes the previous session's close, so a run after the SET close is
+# exactly as fresh as the deck needs.
+#
+# Margin and block-trade figures are carried over from the committed snapshot -
+# they change rarely, and anyone can load a newer file through the page itself.
+
+on:
+  schedule:
+    # 11:00 UTC = 18:00 Bangkok, after the SET close, Monday to Friday.
+    - cron: "0 11 * * 1-5"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install chromium --with-deps
+
+      - name: Refresh prices and warrants
+        id: refresh
+        # A bad scrape must not overwrite a good snapshot, so a failure here
+        # leaves the published data untouched.
+        continue-on-error: true
+        run: python tools/refresh_snapshot.py data.json
+
+      - name: Commit the snapshot if it changed
+        if: steps.refresh.outcome == 'success'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data.json)" ]; then
+            git add data.json
+            git commit -m "Refresh prices ($(date -u +%Y-%m-%d))"
+            git push
+          else
+            echo "snapshot unchanged"
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
