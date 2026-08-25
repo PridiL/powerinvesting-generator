@@ -45,12 +45,17 @@ function step(close, n, dir) {
 const fmt2 = v => Number(v).toFixed(2);
 
 function technicalLevels(close, rule) {
-  const s = [step(close, rule.s1, -1), step(close, rule.s2, -1)].sort((a, b) => a - b);
+  // Both read outward from the closing price, as in the source deck:
+  //   Support    1 (higher) / 2 (lower)   e.g. 46.25/45.75
+  //   Resistance 1 (lower)  / 2 (higher)  e.g. 47.75/48.75
+  // Sorted rather than taken in rule order, so the labels stay true even if
+  // the tick counts are entered the other way round.
+  const s = [step(close, rule.s1, -1), step(close, rule.s2, -1)].sort((a, b) => b - a);
   const r = [step(close, rule.r1, +1), step(close, rule.r2, +1)].sort((a, b) => a - b);
   return {
     tick: fmt2(tickAt(r2(close)) / SC),
-    support: `${fmt2(s[0])}-${fmt2(s[1])}`,
-    resistance: `${fmt2(r[0])}-${fmt2(r[1])}`,
+    support: `${fmt2(s[0])}/${fmt2(s[1])}`,
+    resistance: `${fmt2(r[0])}/${fmt2(r[1])}`,
     stop_loss: fmt2(step(close, rule.stop, -1)),
   };
 }

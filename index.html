@@ -132,15 +132,17 @@
       <summary>Technical level rules</summary>
       <div style="padding-top:16px">
         <div class="tickgrid">
-          <div><label for="s1">Support 1</label><input type="number" id="s1" value="2" min="1" max="50"></div>
-          <div><label for="s2">Support 2</label><input type="number" id="s2" value="4" min="1" max="50"></div>
-          <div><label for="r1">Resistance 1</label><input type="number" id="r1" value="4" min="1" max="50"></div>
-          <div><label for="r2">Resistance 2</label><input type="number" id="r2" value="8" min="1" max="50"></div>
+          <div><label for="s1">Support 1 (higher)</label><input type="number" id="s1" value="2" min="1" max="50"></div>
+          <div><label for="s2">Support 2 (lower)</label><input type="number" id="s2" value="4" min="1" max="50"></div>
+          <div><label for="r1">Resistance 1 (lower)</label><input type="number" id="r1" value="4" min="1" max="50"></div>
+          <div><label for="r2">Resistance 2 (higher)</label><input type="number" id="r2" value="8" min="1" max="50"></div>
           <div><label for="stop">Stop loss</label><input type="number" id="stop" value="8" min="1" max="50"></div>
         </div>
         <div class="hint">Values are <strong>ticks</strong> from the closing price &mdash; support and stop
-          below, resistance above. Tick size follows the SET spread table and is re-read at every step,
-          so levels stay valid across a price band boundary.</div>
+          below, resistance above. Both pairs read outward from the close, so support shows
+          <strong>higher/lower</strong> and resistance shows <strong>lower/higher</strong>.
+          Tick size follows the SET spread table and is re-read at every step, so levels stay
+          valid across a price band boundary.</div>
         <div class="row c2" style="margin-top:16px">
           <div>
             <label for="dw_type">Warrant type</label>
