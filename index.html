@@ -245,7 +245,15 @@ loadAssets().then(([data, art]) => {
     day: 'numeric', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
-  $('stamp').innerHTML = `Prices and warrant data from <strong>${stampText}</strong> &middot;
+  // Say which session the closes belong to - a stale snapshot should be
+  // obvious on the page rather than silently producing an old deck.
+  const tradeDate = data.trade_date
+    ? new Date(data.trade_date + 'T00:00:00').toLocaleDateString('en-GB',
+        { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    : null;
+  $('stamp').innerHTML =
+    (tradeDate ? `Closing prices from <strong>${esc(tradeDate)}</strong> &middot; ` : '') +
+    `data fetched ${stampText} &middot;
     ${Object.keys(data.stocks).length} stocks, ${Object.values(data.warrants).flat().length} warrants.`;
 
   $('sources').innerHTML = `

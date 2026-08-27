@@ -18,6 +18,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright   # noqa: E402
 
+BANGKOK = dt.timezone(dt.timedelta(hours=7))
+
+
+def market_today():
+    """Today's date on the exchange, not on the CI runner (which is UTC)."""
+    return dt.datetime.now(BANGKOK).date()
+
+
+def market_as_of(page):
+    """Date of the most recent completed SET session."""
+    try:
+        status, body = page.evaluate(
+            """async () => {
+                const r = await fetch('/api/set/stock/PTT/highlight-data?lang=en',
+                                      {headers: {accept: 'application/json'}});
+                return [r.status, await r.text()];
+            }""")
+        if status == 200:
+            raw = (json.loads(body) or {}).get("asOfDate")
+            if raw:
+                return dt.date.fromisoformat(raw[:10])
+    except Exception:
+        pass
+    return None
+
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 SET_WARMUP = "https://www.set.or.th/en/market/product/stock/quote/PTT/price"
@@ -42,6 +68,15 @@ def main(target):
         page.goto(SET_WARMUP, wait_until="domcontentloaded", timeout=90_000)
         page.wait_for_timeout(4000)
 
+        # Which field holds the last close depends on whether today's session
+        # has finished. `asOfDate` is the date of the most recent completed
+        # session and is the same for every symbol, so one call settles it.
+        as_of = market_as_of(page)
+        session_closed = bool(as_of and as_of >= market_today())
+        print(f"last completed session: {as_of} "
+              f"({'today has closed' if session_closed else 'today still to close'})",
+              flush=True)
+
         stocks, failed, started = {}, [], time.time()
         for i, sym in enumerate(symbols, 1):
             try:
@@ -55,7 +90,12 @@ def main(target):
                     failed.append(sym)
                     continue
                 d = json.loads(body)
-                close = d.get("prior") or d.get("last")
+                # After the close `last` IS today's close and `prior` has moved
+                # on to the session before it, which would be T-2.
+                if session_closed and d.get("last"):
+                    close = d["last"]
+                else:
+                    close = d.get("prior") or d.get("last")
                 if not close:
                     failed.append(sym)
                     continue
@@ -105,10 +145,12 @@ def main(target):
         print(f"   {len(rows)} warrants over {len(warrants)} underlyings", flush=True)
 
     snap["stocks"] = stocks
+    snap["trade_date"] = as_of.isoformat() if as_of else None
     snap["generated_at"] = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
 
     Path(target).write_text(json.dumps(snap, separators=(",", ":")), encoding="utf-8")
-    print(f"\nwrote {target}: {len(stocks)} stocks, "
+    print(f"\nwrote {target}: closes dated {snap.get('trade_date')}, "
+          f"{len(stocks)} stocks, "
           f"{len(snap.get('margin', {}))} margin rates (carried over), "
           f"{len(snap.get('block_trade', {}))} SSF stocks (carried over)")
     if failed:
