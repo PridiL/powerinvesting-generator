@@ -182,6 +182,24 @@ function dateLabel(iso) {
   return `${d.getDate()} ${d.toLocaleString('en-US', { month: 'long' })} ${d.getFullYear()}`;
 }
 
+// TFEX quarterly delivery months. SSF contracts settle at the end of their
+// delivery month, so a contract stays the front month for all of that month.
+const QUARTER_CODES = { 3: 'H', 6: 'M', 9: 'U', 12: 'Z' };
+
+function frontSeries(available, today = new Date()) {
+  let year = today.getFullYear(), month = today.getMonth() + 1;
+  for (let i = 0; i < 8; i++) {
+    if (QUARTER_CODES[month]) {
+      const code = QUARTER_CODES[month] + String(year % 100).padStart(2, '0');
+      // Only offer it if the workbook actually carries that series.
+      if (!available || !available.length || available.includes(code)) return code;
+    }
+    if (++month > 12) { month = 1; year++; }
+  }
+  // Nothing matched (an unusual workbook) - fall back to what it does have.
+  return available && available.length ? available[0] : null;
+}
+
 /* ---------- PowerPoint ---------- */
 
 async function buildPptx(cards, isoDate, artDataUrl) {
@@ -357,6 +375,6 @@ function drawSlide(canvas, chunk, isoDate, artImage, cssWidth = 1400) {
 }
 
 window.PowerInvesting = {
-  buildCard, buildPptx, buildPdf, drawSlide, loadFont, technicalLevels,
+  buildCard, buildPptx, buildPdf, drawSlide, loadFont, technicalLevels, frontSeries,
   chunkCards, dateLabel, LAYOUT, ROWS, VALUE_FIELDS,
 };

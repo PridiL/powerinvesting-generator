@@ -325,6 +325,10 @@ function applyOverrides() {
 
 function refreshSeries() {
   const cur = $('series').value;
+  // Recompute rather than trusting the snapshot: an uploaded workbook issued
+  // after a quarterly roll carries different series, and a stale front month
+  // would leave the wrong contract selected.
+  DATA.front_series = PowerInvesting.frontSeries(DATA.series) || DATA.front_series;
   const wanted = DATA.series.includes(cur) ? cur : DATA.front_series;
   $('series').innerHTML = DATA.series.map(x =>
     `<option value="${x}"${x === wanted ? ' selected' : ''}>${x}${x === DATA.front_series ? ' (front month)' : ''}</option>`).join('');
@@ -392,6 +396,9 @@ $('upBlock').onchange  = e => handleUpload(e.target, 'block');
 $('resetRef').onclick = () => {
   OVERRIDES = { margin: null, block: null };
   try { localStorage.removeItem(STORE); } catch (e) {}
+  // Clear the selection first: whatever is showing was forced by the uploaded
+  // workbook's series, not chosen, so reset should land on the front month.
+  $('series').innerHTML = '';
   applyOverrides();
   upAlert('ok', 'Back to the built-in reference files.');
 };
