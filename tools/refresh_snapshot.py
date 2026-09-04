@@ -75,13 +75,27 @@ SET_WARMUP = "https://www.set.or.th/en/market/product/stock/quote/PTT/price"
 DW_WARMUP = "https://www.dw19club.com/"
 
 
+def listed_symbols(page):
+    """Every ordinary share currently listed on SET/mai."""
+    status, body = page.evaluate(
+        """async () => {
+            const r = await fetch('/api/set/stock/list?securityType=S&lang=en',
+                                  {headers: {accept: 'application/json'}});
+            return [r.status, await r.text()];
+        }""")
+    if status != 200:
+        return []
+    return sorted({s["symbol"].strip().upper()
+                   for s in (json.loads(body).get("securitySymbols") or [])
+                   if s.get("symbol")})
+
+
 def main(target):
     snap = json.loads(Path(target).read_text(encoding="utf-8"))
-    symbols = sorted(snap.get("stocks", {}))
-    if not symbols:
+    known = sorted(snap.get("stocks", {}))
+    if not known:
         print("no stocks in the snapshot to refresh")
         return 1
-    print(f"refreshing {len(symbols)} stocks", flush=True)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -92,6 +106,13 @@ def main(target):
         page = ctx.new_page()
         page.goto(SET_WARMUP, wait_until="domcontentloaded", timeout=90_000)
         page.wait_for_timeout(4000)
+
+        # Follow the live listing so newly listed shares appear on their own;
+        # fall back to what the snapshot already holds if that call fails.
+        symbols = listed_symbols(page) or known
+        added = len(set(symbols) - set(known))
+        print(f"refreshing {len(symbols)} stocks"
+              f"{f' ({added} newly listed)' if added else ''}", flush=True)
 
         as_of = market_as_of(page)
         trade_date = None
@@ -126,7 +147,7 @@ def main(target):
             if i % 50 == 0:
                 print(f"   {i}/{len(symbols)} ({i/max(time.time()-started,1e-6):.1f}/s)", flush=True)
 
-        if len(stocks) < len(symbols) * 0.8:
+        if len(stocks) < len(known) * 0.8:
             print(f"only {len(stocks)}/{len(symbols)} priced - refusing to overwrite")
             browser.close()
             return 1

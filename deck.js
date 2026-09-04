@@ -65,7 +65,10 @@ function technicalLevels(close, rule) {
 function buildCard(symbol, data, opts) {
   const notes = [];
   const stock = data.stocks[symbol];
-  if (!stock) return { error: `${symbol} is not in the snapshot` };
+  // Every listed share is priced, so a miss here means the symbol is not on
+  // SET at all - a stock merely absent from the reference files still gets a
+  // card, with "-" in the rows it has no data for.
+  if (!stock) return { error: `${symbol} is not a SET-listed symbol` };
 
   const close = stock.close;
   const lv = technicalLevels(close, opts.rule);
