@@ -26,6 +26,31 @@ def market_today():
     return dt.datetime.now(BANGKOK).date()
 
 
+# Phases in which trading is under way or still to come, so `last` is not a
+# final close. SET reports plain "Closed" both before the open and after it.
+_TRADING_PREFIXES = ("open", "intermission", "auction", "pre", "call")
+
+
+def is_trading(status):
+    return str(status or "").strip().lower().startswith(_TRADING_PREFIXES)
+
+
+def pick_close(prior, last, status):
+    """Most recent session's close, and whether it is today's.
+
+    Mirrors power_investing/fetchers.pick_close. NOT keyed off
+    `highlight-data.asOfDate`: that lags for hours after the close - at 21:51
+    Bangkok on a Thursday it still read Wednesday, which published T-2.
+    """
+    if last is not None and not is_trading(status):
+        return float(last), True
+    if prior is not None:
+        return float(prior), False
+    if last is not None:
+        return float(last), False
+    return None, False
+
+
 def market_as_of(page):
     """Date of the most recent completed SET session."""
     try:
@@ -68,14 +93,8 @@ def main(target):
         page.goto(SET_WARMUP, wait_until="domcontentloaded", timeout=90_000)
         page.wait_for_timeout(4000)
 
-        # Which field holds the last close depends on whether today's session
-        # has finished. `asOfDate` is the date of the most recent completed
-        # session and is the same for every symbol, so one call settles it.
         as_of = market_as_of(page)
-        session_closed = bool(as_of and as_of >= market_today())
-        print(f"last completed session: {as_of} "
-              f"({'today has closed' if session_closed else 'today still to close'})",
-              flush=True)
+        trade_date = None
 
         stocks, failed, started = {}, [], time.time()
         for i, sym in enumerate(symbols, 1):
@@ -90,15 +109,16 @@ def main(target):
                     failed.append(sym)
                     continue
                 d = json.loads(body)
-                # After the close `last` IS today's close and `prior` has moved
-                # on to the session before it, which would be T-2.
-                if session_closed and d.get("last"):
-                    close = d["last"]
-                else:
-                    close = d.get("prior") or d.get("last")
-                if not close:
+                close, from_today = pick_close(
+                    d.get("prior"), d.get("last"), d.get("marketStatus"))
+                if close is None:
                     failed.append(sym)
                     continue
+                if trade_date is None:
+                    trade_date = market_today() if from_today else as_of
+                    print(f"quoting the close of {trade_date}"
+                          f" ({'today, just closed' if from_today else 'the last completed session'})",
+                          flush=True)
                 stocks[sym] = {"close": float(close), "tick": d.get("tickSize"),
                                "name": d.get("nameEN"), "market": d.get("marketName")}
             except Exception:
@@ -145,7 +165,7 @@ def main(target):
         print(f"   {len(rows)} warrants over {len(warrants)} underlyings", flush=True)
 
     snap["stocks"] = stocks
-    snap["trade_date"] = as_of.isoformat() if as_of else None
+    snap["trade_date"] = trade_date.isoformat() if trade_date else None
     snap["generated_at"] = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
 
     Path(target).write_text(json.dumps(snap, separators=(",", ":")), encoding="utf-8")

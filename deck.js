@@ -62,8 +62,6 @@ function technicalLevels(close, rule) {
 
 /* ---------- card assembly ---------- */
 
-const DEFAULT_MARGIN_IM = 100;
-
 function buildCard(symbol, data, opts) {
   const notes = [];
   const stock = data.stocks[symbol];
@@ -90,9 +88,11 @@ function buildCard(symbol, data, opts) {
     card.margin_im = `${m.im_percent}%`;
     card.margin_gearing = m.gearing.toFixed(2);
   } else {
-    card.margin_im = `${DEFAULT_MARGIN_IM}%`;
-    card.margin_gearing = (100 / DEFAULT_MARGIN_IM).toFixed(2);
-    notes.push('not itemised in the marginable announcement - showing the IM = 100% default from its note 2');
+    // Not in the announcement: leave the two Margin Loan rows blank rather than
+    // inventing a rate. Closing price and the technical levels still fill in.
+    card.margin_im = '-';
+    card.margin_gearing = '-';
+    notes.push('not in the marginable announcement - Margin Loan left blank');
   }
 
   // Derivative warrant: sensitivity closest to 1
