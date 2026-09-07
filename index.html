@@ -212,7 +212,13 @@ const alertBox = (k, h) => { $('alert').innerHTML = h ? `<div class="msg ${k}">$
 
 let DATA = null, ART = null, ARTIMG = null, LAST = null, BUNDLED = null;
 
-$('date').value = new Date().toISOString().slice(0, 10);
+// Local date parts, not toISOString(): that returns UTC, so in Bangkok
+// (UTC+7) it reads as yesterday any time before 07:00 and would date the
+// deck a day early.
+const localISO = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+$('date').value = localISO();
 
 // The single-file build (tools/build_single_file.py) injects window.EMBEDDED so
 // the page needs no network at all - it works straight off a file:// path, where
