@@ -161,6 +161,7 @@
       <button class="ghost" id="demo">Use the example (AURA CPALL SCB)</button>
     </div>
     <div class="stamp" id="stamp"></div>
+    <div id="fresh"></div>
   </div>
 
   <div id="results"></div>
@@ -220,6 +221,41 @@ const localISO = (d = new Date()) =>
 
 $('date').value = localISO();
 
+// Weekday arithmetic on ISO dates (local). Thai market holidays are not known
+// here, so the freshness warning is worded to allow for them.
+const shiftWeekday = (iso, dir) => {
+  const d = new Date(iso + 'T00:00:00');
+  do { d.setDate(d.getDate() + dir); } while (d.getDay() === 0 || d.getDay() === 6);
+  return localISO(d);
+};
+const niceDate = iso => new Date(iso + 'T00:00:00').toLocaleDateString('en-GB',
+  { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+// A deck dated T must quote the close of T-1. Say so plainly whenever the
+// loaded closes do not belong to the trading day before the report date -
+// on 25 Sep 2026 a failed refresh left the site quoting 23 Sep with nothing
+// on the page to show it.
+function freshness() {
+  const box = $('fresh');
+  if (!DATA || !DATA.trade_date || !box) return null;
+  const report = $('date').value;
+  const want = shiftWeekday(report, -1);
+  const have = DATA.trade_date;
+  let msg = null;
+  if (have < want) {
+    msg = `<strong>Closing prices may be out of date.</strong> They are from
+      ${esc(niceDate(have))}, but a deck dated ${esc(niceDate(report))} should quote
+      ${esc(niceDate(want))}. Unless ${esc(niceDate(want).split(',')[0])} was a
+      market holiday, the refresh has not run yet &mdash; check before sending.`;
+  } else if (have >= report) {
+    msg = `<strong>These closes are from ${esc(niceDate(have))}</strong>, which is not
+      before the report date. For a T-1 deck, date it
+      ${esc(niceDate(shiftWeekday(have, +1)))}.`;
+  }
+  box.innerHTML = msg ? `<div class="msg warn" style="margin:12px 0 0">${msg}</div>` : '';
+  return msg;
+}
+
 // The single-file build (tools/build_single_file.py) injects window.EMBEDDED so
 // the page needs no network at all - it works straight off a file:// path, where
 // fetch() is blocked anyway. Otherwise the assets sit next to the page.
@@ -244,6 +280,14 @@ loadAssets().then(([data, art]) => {
   loadOverrides();
   applyOverrides();
 
+  // After an evening refresh the snapshot already holds TODAY's close, so a
+  // deck dated today would quote T-0. Move the default on to the next trading
+  // day; the user can still pick any date.
+  if (data.trade_date) {
+    const earliest = shiftWeekday(data.trade_date, +1);
+    if ($('date').value < earliest) $('date').value = earliest;
+  }
+
   const when = new Date(data.generated_at);
   // Pinned to en-GB: a Thai-locale machine otherwise renders this in the
   // Buddhist era (2569), which reads as wrong next to a deck dated 2026.
@@ -261,6 +305,8 @@ loadAssets().then(([data, art]) => {
     (tradeDate ? `Closing prices from <strong>${esc(tradeDate)}</strong> &middot; ` : '') +
     `data fetched ${stampText} &middot;
     ${Object.keys(data.stocks).length} stocks, ${Object.values(data.warrants).flat().length} warrants.`;
+  freshness();
+  $('date').addEventListener('change', freshness);
 
   $('sources').innerHTML = `
     <strong>Closing price</strong> &mdash; previous session's official close from set.or.th.<br>

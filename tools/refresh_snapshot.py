@@ -75,19 +75,64 @@ SET_WARMUP = "https://www.set.or.th/en/market/product/stock/quote/PTT/price"
 DW_WARMUP = "https://www.dw19club.com/"
 
 
+def set_get(page, path):
+    """GET a SET API path from inside the page. Never raises.
+
+    A network-level failure ("Failed to fetch") makes page.evaluate THROW
+    rather than return a bad status - that is what crashed the 24 Sep run, so
+    every call goes through here and a failure comes back as (None, None).
+    """
+    try:
+        return page.evaluate(
+            """async (u) => {
+                const r = await fetch(u, {headers: {accept: 'application/json'}});
+                return [r.status, await r.text()];
+            }""", path)
+    except Exception as exc:
+        print(f"   fetch failed for {path.split('?')[0]}: {str(exc).splitlines()[0][:120]}",
+              flush=True)
+        return None, None
+
+
+def warm_up(ctx, attempts=4):
+    """A SET page whose session can actually call the API.
+
+    set.or.th sits behind Incapsula. Loading a page is not proof the challenge
+    cleared - the 24 Sep run loaded one, waited six minutes and then every fetch
+    failed - so each attempt is checked with a real API call before it is used.
+    """
+    page = None
+    for n in range(1, attempts + 1):
+        try:
+            if page is None:
+                page = ctx.new_page()
+            page.goto(SET_WARMUP, wait_until="domcontentloaded", timeout=90_000)
+            page.wait_for_timeout(4000 + 3000 * (n - 1))
+            status, body = set_get(page, "/api/set/stock/PTT/info?lang=en")
+            if status == 200 and body and '"symbol"' in body:
+                if n > 1:
+                    print(f"   SET session ready on attempt {n}", flush=True)
+                return page
+            print(f"   SET warm-up attempt {n}: API answered {status}", flush=True)
+        except Exception as exc:
+            print(f"   SET warm-up attempt {n} failed: {str(exc).splitlines()[0][:120]}",
+                  flush=True)
+            page = None
+        time.sleep(5 * n)
+    return None
+
+
 def listed_symbols(page):
-    """Every ordinary share currently listed on SET/mai."""
-    status, body = page.evaluate(
-        """async () => {
-            const r = await fetch('/api/set/stock/list?securityType=S&lang=en',
-                                  {headers: {accept: 'application/json'}});
-            return [r.status, await r.text()];
-        }""")
-    if status != 200:
+    """Every ordinary share currently listed on SET/mai, or [] if unavailable."""
+    status, body = set_get(page, "/api/set/stock/list?securityType=S&lang=en")
+    if status != 200 or not body:
         return []
-    return sorted({s["symbol"].strip().upper()
-                   for s in (json.loads(body).get("securitySymbols") or [])
-                   if s.get("symbol")})
+    try:
+        return sorted({s["symbol"].strip().upper()
+                       for s in (json.loads(body).get("securitySymbols") or [])
+                       if s.get("symbol")})
+    except Exception:
+        return []
 
 
 def main(target):
@@ -101,11 +146,13 @@ def main(target):
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(user_agent=UA)
 
-        # set.or.th sits behind bot protection: load a real page first, then
-        # call the JSON API from inside that page.
-        page = ctx.new_page()
-        page.goto(SET_WARMUP, wait_until="domcontentloaded", timeout=90_000)
-        page.wait_for_timeout(4000)
+        # set.or.th sits behind bot protection: get a page whose session has
+        # been proven to reach the API before relying on it.
+        page = warm_up(ctx)
+        if page is None:
+            print("could not get a working SET session - keeping the previous snapshot")
+            browser.close()
+            return 1
 
         # Follow the live listing so newly listed shares appear on their own;
         # fall back to what the snapshot already holds if that call fails.
@@ -118,14 +165,29 @@ def main(target):
         trade_date = None
 
         stocks, failed, started = {}, [], time.time()
+        misses_in_a_row, rewarms = 0, 0
         for i, sym in enumerate(symbols, 1):
             try:
-                status, body = page.evaluate(
-                    """async (s) => {
-                        const r = await fetch(`/api/set/stock/${encodeURIComponent(s)}/info?lang=en`,
-                                              {headers: {accept: 'application/json'}});
-                        return [r.status, await r.text()];
-                    }""", sym)
+                status, body = set_get(
+                    page, f"/api/set/stock/{sym}/info?lang=en")
+                if status is None:
+                    # The session itself has gone (challenge re-armed, or the
+                    # connection dropped). A run of these means re-warm rather
+                    # than write off every remaining symbol.
+                    misses_in_a_row += 1
+                    if misses_in_a_row >= 5 and rewarms < 3:
+                        print(f"   {misses_in_a_row} fetches failed in a row at {sym} "
+                              f"- re-warming the SET session", flush=True)
+                        fresh = warm_up(ctx)
+                        rewarms += 1
+                        if fresh is not None:
+                            page, misses_in_a_row = fresh, 0
+                            status, body = set_get(
+                                page, f"/api/set/stock/{sym}/info?lang=en")
+                    if status is None:
+                        failed.append(sym)
+                        continue
+                misses_in_a_row = 0
                 if status != 200:
                     failed.append(sym)
                     continue
@@ -152,18 +214,30 @@ def main(target):
             browser.close()
             return 1
 
-        dw = ctx.new_page()
-        dw.goto(DW_WARMUP, wait_until="domcontentloaded", timeout=90_000)
-        dw.wait_for_timeout(3000)
-        rows = dw.evaluate("""async () => {
-            const body = {underlying:'', callorput:'', issuer:['All'],
-                gearing_start:'', gearing_end:'', sensitivity_start:'', sensitivity_end:'',
-                price_start:'', price_end:'', moneyness_start:'', moneyness_end:'',
-                days_ltd_start:'', days_ltd_end:'', offset:1, limit:5000};
-            const r = await fetch('/api/search/advance', {method:'POST',
-                headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
-            return r.ok ? (await r.json()).result_set : null;
-        }""")
+        # Warrants are a separate site. If it is down, keep the prices just
+        # fetched and carry the previous warrants over, rather than losing the
+        # whole run to one failed call.
+        rows = None
+        for n in range(1, 4):
+            try:
+                dw = ctx.new_page()
+                dw.goto(DW_WARMUP, wait_until="domcontentloaded", timeout=90_000)
+                dw.wait_for_timeout(3000)
+                rows = dw.evaluate("""async () => {
+                    const body = {underlying:'', callorput:'', issuer:['All'],
+                        gearing_start:'', gearing_end:'', sensitivity_start:'', sensitivity_end:'',
+                        price_start:'', price_end:'', moneyness_start:'', moneyness_end:'',
+                        days_ltd_start:'', days_ltd_end:'', offset:1, limit:5000};
+                    const r = await fetch('/api/search/advance', {method:'POST',
+                        headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
+                    return r.ok ? (await r.json()).result_set : null;
+                }""")
+                if rows:
+                    break
+            except Exception as exc:
+                print(f"   dw19club attempt {n} failed: {str(exc).splitlines()[0][:120]}",
+                      flush=True)
+            time.sleep(5 * n)
         browser.close()
 
     if not rows:

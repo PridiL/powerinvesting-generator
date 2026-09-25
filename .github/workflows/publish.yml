@@ -1,16 +1,21 @@
 name: Refresh data and publish
 
 # Refreshes closing prices and warrant data, then republishes the site.
-# The deck quotes the previous session's close, so a run after the SET close is
-# exactly as fresh as the deck needs.
 #
 # Margin and block-trade figures are carried over from the committed snapshot -
 # they change rarely, and anyone can load a newer file through the page itself.
+#
+# Two runs a day, because one failed evening scrape once left the site quoting
+# T-2 all the next day (24 Sep 2026). Both are safe at any hour: the close is
+# chosen from SET's session state, so a delayed run still picks yesterday's.
 
 on:
   schedule:
     # 11:00 UTC = 18:00 Bangkok, after the SET close, Monday to Friday.
     - cron: "0 11 * * 1-5"
+    # 23:00 UTC = 06:00 Bangkok the next morning, before the open - a second
+    # chance to publish yesterday's close if the evening run failed.
+    - cron: "0 23 * * 0-4"
   workflow_dispatch:
   push:
     branches: [main]
@@ -43,7 +48,8 @@ jobs:
       - name: Refresh prices and warrants
         id: refresh
         # A bad scrape must not overwrite a good snapshot, so a failure here
-        # leaves the published data untouched.
+        # leaves the published data untouched - but see the last step: it
+        # must never pass silently.
         continue-on-error: true
         run: python tools/refresh_snapshot.py data.json
 
@@ -55,15 +61,35 @@ jobs:
           if [ -n "$(git status --porcelain data.json)" ]; then
             git add data.json
             git commit -m "Refresh prices ($(date -u +%Y-%m-%d))"
+            git pull --rebase origin main
             git push
           else
             echo "snapshot unchanged"
           fi
 
+      - name: Report which session the site is quoting
+        run: |
+          python - <<'PY'
+          import json
+          d = json.load(open("data.json", encoding="utf-8"))
+          print(f"published closes are dated {d.get('trade_date')} "
+                f"({len(d.get('stocks', {}))} stocks)")
+          PY
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
+
+      # continue-on-error above keeps the site up on a bad scrape, but it also
+      # made the run show GREEN while the data went stale. Fail the run here so
+      # GitHub sends its failed-workflow e-mail. The previous snapshot stays
+      # published - nothing is lost by skipping this deploy.
+      - name: Fail loudly if the refresh did not complete
+        if: steps.refresh.outcome != 'success'
+        run: |
+          echo "::error::Price refresh failed - the site is still serving the previous snapshot."
+          exit 1
 
   deploy:
     needs: build
